@@ -7,6 +7,7 @@ Instead of desktop capture libraries, it uses the browser's native `getDisplayMe
 1. You open a local web page in your Codespace.
 2. You choose exactly which screen/window/tab to share.
 3. The page streams frames to a Python backend.
+4. The backend analyzes each frame and can respond in text that the browser can speak aloud.
 4. The backend runs AI-style analysis on each frame.
 
 This works well in Codespaces because the browser is already your UI surface.
@@ -22,6 +23,9 @@ This works well in Codespaces because the browser is already your UI surface.
 - User-selectable screen/window/tab capture.
 - Adjustable FPS and JPEG quality.
 - Real-time frame analysis endpoint over WebSocket.
+- Two-way voice/text interaction:
+  - Talk to the AI with the browser microphone (Web Speech API), or type a question.
+  - AI answers with text and can read answers aloud via speech synthesis.
 - Built-in analysis:
   - brightness estimate
   - edge density (scene complexity proxy)
@@ -44,6 +48,10 @@ Open forwarded port `8000` in your browser and click **Start sharing**.
 - Browser sends JSON messages to `ws://<host>/ws`.
 - Message types:
   - `frame`: base64 JPEG + metadata
+  - `user_text`: user question from typed input or speech recognition transcript
+- Server responds with JSON containing:
+  - frame analysis payload
+  - `assistant_text` response suitable for TTS playback
   - `control`: start/stop and settings updates
 - Server responds with JSON containing analysis for each frame.
 
@@ -52,6 +60,7 @@ Open forwarded port `8000` in your browser and click **Start sharing**.
 - `getDisplayMedia` requires HTTPS or localhost context. Forwarded Codespaces URLs satisfy this.
 - Screen chooser is controlled by the browser for security; apps cannot bypass it.
 - For better performance, keep FPS between 1–8 unless you have strong CPU headroom.
+- Browser microphone/speech features depend on browser support (`SpeechRecognition`/`webkitSpeechRecognition`).
 
 ## Optional OpenAI vision integration
 

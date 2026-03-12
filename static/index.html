@@ -8,6 +8,8 @@
     body { font-family: Arial, sans-serif; max-width: 900px; margin: 2rem auto; padding: 0 1rem; }
     .row { display: flex; gap: 0.75rem; flex-wrap: wrap; align-items: center; margin-bottom: 1rem; }
     button { padding: 0.6rem 1rem; border: 1px solid #aaa; border-radius: 8px; cursor: pointer; }
+    input[type='number'] { width: 6rem; }
+    input[type='text'] { width: 22rem; max-width: 100%; }
     input { width: 6rem; }
     video { width: 100%; max-height: 340px; background: #111; border-radius: 8px; }
     pre { background: #111; color: #adffb4; padding: 1rem; border-radius: 8px; overflow: auto; }
@@ -16,6 +18,7 @@
 </head>
 <body>
   <h1>ScreenSight AI (Codespaces, no mss)</h1>
+  <p class="muted">Choose a tab/window/screen, stream frames, and talk with the AI via voice or text.</p>
   <p class="muted">Choose a tab/window/screen, stream frames, and receive live analysis.</p>
 
   <div class="row">
@@ -24,6 +27,13 @@
     <label>FPS <input id="fps" type="number" min="1" max="12" value="3" /></label>
     <label>JPEG quality <input id="quality" type="number" min="0.1" max="1" step="0.1" value="0.6" /></label>
     <label><input id="ocr" type="checkbox" /> OCR</label>
+    <label><input id="speakAi" type="checkbox" checked /> Speak AI responses</label>
+  </div>
+
+  <div class="row">
+    <input id="userText" type="text" placeholder="Ask: what do you see? how much motion?" />
+    <button id="sendTextBtn" disabled>Send message</button>
+    <button id="micBtn" disabled>Start mic</button>
   </div>
 
   <video id="preview" autoplay muted playsinline></video>
@@ -38,14 +48,38 @@
     const fpsInput = document.getElementById('fps');
     const qualityInput = document.getElementById('quality');
     const ocrInput = document.getElementById('ocr');
+    const speakAiInput = document.getElementById('speakAi');
+    const userTextInput = document.getElementById('userText');
+    const sendTextBtn = document.getElementById('sendTextBtn');
+    const micBtn = document.getElementById('micBtn');
 
     let stream = null;
     let ws = null;
     let timer = null;
+    let recognition = null;
+    let listening = false;
 
     function wsUrl() {
       const proto = location.protocol === 'https:' ? 'wss' : 'ws';
       return `${proto}://${location.host}/ws`;
+    }
+
+    function setOutput(obj) {
+      output.textContent = typeof obj === 'string' ? obj : JSON.stringify(obj, null, 2);
+    }
+
+    function speak(text) {
+      if (!speakAiInput.checked || !('speechSynthesis' in window) || !text) return;
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.rate = 1.0;
+      window.speechSynthesis.cancel();
+      window.speechSynthesis.speak(utterance);
+    }
+
+    function sendUserText(text) {
+      const clean = (text || '').trim();
+      if (!clean || !ws || ws.readyState !== WebSocket.OPEN) return;
+      ws.send(JSON.stringify({ type: 'user_text', text: clean }));
     }
 
     async function frameToBase64(video, quality) {
@@ -66,6 +100,39 @@
       return btoa(binary);
     }
 
+    function setupMic() {
+      const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+      if (!SR) {
+        micBtn.disabled = true;
+        micBtn.textContent = 'Mic unavailable';
+        return;
+      }
+
+      recognition = new SR();
+      recognition.continuous = true;
+      recognition.interimResults = false;
+      recognition.lang = 'en-US';
+
+      recognition.onresult = (evt) => {
+        const result = evt.results[evt.results.length - 1];
+        const transcript = result[0].transcript;
+        userTextInput.value = transcript;
+        sendUserText(transcript);
+      };
+
+      recognition.onend = () => {
+        if (listening) {
+          recognition.start();
+          return;
+        }
+        micBtn.textContent = 'Start mic';
+      };
+
+      recognition.onerror = (evt) => {
+        setOutput(`Mic error: ${evt.error}`);
+      };
+    }
+
     async function start() {
       stream = await navigator.mediaDevices.getDisplayMedia({
         video: { frameRate: { ideal: Number(fpsInput.value) || 3 } },
@@ -75,6 +142,14 @@
 
       ws = new WebSocket(wsUrl());
       ws.onmessage = (evt) => {
+        const data = JSON.parse(evt.data);
+        setOutput(data);
+        if (data.type === 'analysis' && data.assistant_text) {
+          speak(data.assistant_text);
+        }
+        if (data.type === 'assistant_text' && data.text) {
+          speak(data.text);
+        }
         output.textContent = evt.data;
       };
 
@@ -96,11 +171,18 @@
 
       startBtn.disabled = true;
       stopBtn.disabled = false;
+      sendTextBtn.disabled = false;
+      micBtn.disabled = false;
+      setupMic();
     }
 
     function stop() {
       if (timer) clearInterval(timer);
       timer = null;
+      if (recognition && listening) {
+        listening = false;
+        recognition.stop();
+      }
       if (ws) ws.close();
       ws = null;
       if (stream) {
@@ -109,6 +191,33 @@
       stream = null;
       startBtn.disabled = false;
       stopBtn.disabled = true;
+      sendTextBtn.disabled = true;
+      micBtn.disabled = true;
+      micBtn.textContent = 'Start mic';
+    }
+
+    startBtn.addEventListener('click', () => start().catch(err => setOutput(String(err))));
+    stopBtn.addEventListener('click', stop);
+
+    sendTextBtn.addEventListener('click', () => sendUserText(userTextInput.value));
+    userTextInput.addEventListener('keydown', (evt) => {
+      if (evt.key === 'Enter') {
+        evt.preventDefault();
+        sendUserText(userTextInput.value);
+      }
+    });
+
+    micBtn.addEventListener('click', () => {
+      if (!recognition) return;
+      listening = !listening;
+      if (listening) {
+        recognition.start();
+        micBtn.textContent = 'Stop mic';
+      } else {
+        recognition.stop();
+        micBtn.textContent = 'Start mic';
+      }
+    });
     }
 
     startBtn.addEventListener('click', () => start().catch(err => output.textContent = String(err)));

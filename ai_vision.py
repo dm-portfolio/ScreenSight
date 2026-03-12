@@ -77,6 +77,29 @@ def analyze_frame(
     )
 
 
+def build_assistant_text(stats: FrameStats, user_text: str | None = None) -> str:
+    brightness = "bright" if stats.brightness >= 0.6 else "dim"
+    movement = "a lot of motion" if stats.motion_score >= 0.2 else "little motion"
+    detail = "high detail" if stats.edge_density >= 0.12 else "low detail"
+
+    answer = f"I see a {brightness} scene with {detail} and {movement}."
+    if stats.ocr_text:
+        answer += f" Visible text: {stats.ocr_text[:120]}"
+
+    if user_text:
+        prompt = user_text.strip().lower()
+        if "what" in prompt and "see" in prompt:
+            return answer
+        if "motion" in prompt or "moving" in prompt:
+            return f"Current motion score is {stats.motion_score:.2f}, indicating {movement}."
+        if "bright" in prompt or "dark" in prompt:
+            return f"Brightness is {stats.brightness:.2f}, so the scene appears {brightness}."
+        if "text" in prompt or "read" in prompt:
+            return stats.ocr_text or "I do not detect readable text right now."
+
+    return answer
+
+
 def to_payload(stats: FrameStats) -> dict[str, Any]:
     return {
         "brightness": round(stats.brightness, 4),

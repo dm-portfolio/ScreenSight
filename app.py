@@ -7,6 +7,7 @@ from pathlib import Path
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 
+from ai_vision import analyze_frame, build_assistant_text, decode_jpeg, to_payload
 from ai_vision import analyze_frame, decode_jpeg, to_payload
 
 app = FastAPI(title="ScreenSight AI")
@@ -21,10 +22,24 @@ async def index() -> FileResponse:
 async def ws_analyze(websocket: WebSocket) -> None:
     await websocket.accept()
     prev_frame = None
+    latest_stats = None
 
     try:
         while True:
             message = await websocket.receive_json()
+            msg_type = message.get("type")
+
+            if msg_type == "user_text":
+                text = str(message.get("text", "")).strip()
+                if latest_stats is None:
+                    assistant_text = "Share your screen first so I can describe what I see."
+                else:
+                    assistant_text = build_assistant_text(latest_stats, user_text=text)
+                await websocket.send_json({"type": "assistant_text", "text": assistant_text, "ts": time.time()})
+                continue
+
+            if msg_type != "frame":
+                await websocket.send_json({"type": "ack", "received": msg_type})
             if message.get("type") != "frame":
                 await websocket.send_json({"type": "ack", "received": message.get("type")})
                 continue
@@ -41,6 +56,7 @@ async def ws_analyze(websocket: WebSocket) -> None:
                 prev_frame_bgr=prev_frame,
                 enable_ocr=bool(message.get("enable_ocr", False)),
             )
+            latest_stats = stats
             prev_frame = frame
 
             await websocket.send_json(
@@ -52,6 +68,7 @@ async def ws_analyze(websocket: WebSocket) -> None:
                         "height": int(frame.shape[0]),
                     },
                     "analysis": to_payload(stats),
+                    "assistant_text": build_assistant_text(stats),
                 }
             )
     except WebSocketDisconnect:
