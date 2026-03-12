@@ -8,6 +8,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 
 from ai_vision import analyze_frame, build_assistant_text, decode_jpeg, to_payload
+from ai_vision import analyze_frame, decode_jpeg, to_payload
 
 app = FastAPI(title="ScreenSight AI")
 
@@ -39,6 +40,8 @@ async def ws_analyze(websocket: WebSocket) -> None:
 
             if msg_type != "frame":
                 await websocket.send_json({"type": "ack", "received": msg_type})
+            if message.get("type") != "frame":
+                await websocket.send_json({"type": "ack", "received": message.get("type")})
                 continue
 
             b64_data = message.get("jpeg_base64")
