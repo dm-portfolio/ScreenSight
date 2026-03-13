@@ -1,6 +1,7 @@
 import numpy as np
 
 from ai_vision import FrameStats, build_assistant_text, compute_brightness, compute_motion_score
+from ai_vision import compute_brightness, compute_motion_score
 
 
 def test_brightness_range():
