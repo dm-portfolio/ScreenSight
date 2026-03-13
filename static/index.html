@@ -1,0 +1,230 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>ScreenSight AI</title>
+  <style>
+    body { font-family: Arial, sans-serif; max-width: 900px; margin: 2rem auto; padding: 0 1rem; }
+    .row { display: flex; gap: 0.75rem; flex-wrap: wrap; align-items: center; margin-bottom: 1rem; }
+    button { padding: 0.6rem 1rem; border: 1px solid #aaa; border-radius: 8px; cursor: pointer; }
+    input[type='number'] { width: 6rem; }
+    input[type='text'] { width: 22rem; max-width: 100%; }
+    video { width: 100%; max-height: 340px; background: #111; border-radius: 8px; }
+    pre { background: #111; color: #adffb4; padding: 1rem; border-radius: 8px; overflow: auto; }
+    .muted { color: #666; }
+  </style>
+</head>
+<body>
+  <h1>ScreenSight AI (Codespaces, no mss)</h1>
+  <p class="muted">Choose a tab/window/screen, stream frames, and talk with the AI via voice or text.</p>
+
+  <div class="row">
+    <button id="startBtn">Start sharing</button>
+    <button id="stopBtn" disabled>Stop</button>
+    <label>FPS <input id="fps" type="number" min="1" max="12" value="3" /></label>
+    <label>JPEG quality <input id="quality" type="number" min="0.1" max="1" step="0.1" value="0.6" /></label>
+    <label><input id="ocr" type="checkbox" /> OCR</label>
+    <label><input id="speakAi" type="checkbox" checked /> Speak AI responses</label>
+  </div>
+
+  <div class="row">
+    <input id="userText" type="text" placeholder="Ask: what do you see? how much motion?" />
+    <button id="sendTextBtn" disabled>Send message</button>
+    <button id="micBtn" disabled>Start mic</button>
+  </div>
+
+  <video id="preview" autoplay muted playsinline></video>
+  <h3>Latest AI response</h3>
+  <pre id="output">Waiting…</pre>
+
+  <script>
+    const preview = document.getElementById('preview');
+    const output = document.getElementById('output');
+    const startBtn = document.getElementById('startBtn');
+    const stopBtn = document.getElementById('stopBtn');
+    const fpsInput = document.getElementById('fps');
+    const qualityInput = document.getElementById('quality');
+    const ocrInput = document.getElementById('ocr');
+    const speakAiInput = document.getElementById('speakAi');
+    const userTextInput = document.getElementById('userText');
+    const sendTextBtn = document.getElementById('sendTextBtn');
+    const micBtn = document.getElementById('micBtn');
+
+    let stream = null;
+    let ws = null;
+    let timer = null;
+    let recognition = null;
+    let listening = false;
+
+    function wsUrl() {
+      const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+      return `${proto}://${location.host}/ws`;
+    }
+
+    function setOutput(obj) {
+      output.textContent = typeof obj === 'string' ? obj : JSON.stringify(obj, null, 2);
+    }
+
+    function speak(text) {
+      if (!speakAiInput.checked || !('speechSynthesis' in window) || !text) return;
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.rate = 1.0;
+      window.speechSynthesis.cancel();
+      window.speechSynthesis.speak(utterance);
+    }
+
+    function sendUserText(text) {
+      const clean = (text || '').trim();
+      if (!clean || !ws || ws.readyState !== WebSocket.OPEN) return;
+      ws.send(JSON.stringify({ type: 'user_text', text: clean }));
+      userTextInput.value = '';
+    }
+
+    async function frameToBase64(video, quality) {
+      const canvas = document.createElement('canvas');
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+      const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', quality));
+      const buf = await blob.arrayBuffer();
+      let binary = '';
+      const bytes = new Uint8Array(buf);
+      const chunk = 0x8000;
+      for (let i = 0; i < bytes.length; i += chunk) {
+        binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+      }
+      return btoa(binary);
+    }
+
+    function parseMaybeJson(raw) {
+      try {
+        return JSON.parse(raw);
+      } catch {
+        return { type: 'text', text: String(raw) };
+      }
+    }
+
+    function setupMic() {
+      const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+      if (!SR) {
+        micBtn.disabled = true;
+        micBtn.textContent = 'Mic unavailable';
+        return;
+      }
+
+      recognition = new SR();
+      recognition.continuous = true;
+      recognition.interimResults = false;
+      recognition.lang = 'en-US';
+
+      recognition.onresult = (evt) => {
+        const result = evt.results[evt.results.length - 1];
+        const transcript = result[0].transcript;
+        sendUserText(transcript);
+      };
+
+      recognition.onend = () => {
+        if (listening) {
+          recognition.start();
+          return;
+        }
+        micBtn.textContent = 'Start mic';
+      };
+
+      recognition.onerror = (evt) => {
+        setOutput(`Mic error: ${evt.error}`);
+      };
+    }
+
+    async function start() {
+      ws = new WebSocket(wsUrl());
+      ws.onmessage = (evt) => {
+        const data = parseMaybeJson(evt.data);
+        setOutput(data);
+
+        if (data.type === 'analysis' && data.assistant_text) {
+          speak(data.assistant_text);
+        }
+        if (data.type === 'assistant_text' && data.text) {
+          speak(data.text);
+        }
+      };
+      ws.onerror = () => setOutput('WebSocket error. Check server logs and /ws route.');
+      await new Promise(resolve => ws.onopen = resolve);
+
+      stream = await navigator.mediaDevices.getDisplayMedia({
+        video: { frameRate: { ideal: Number(fpsInput.value) || 3 } },
+        audio: false,
+      });
+      preview.srcObject = stream;
+
+      const fps = Math.max(1, Number(fpsInput.value) || 3);
+      const quality = Math.min(1, Math.max(0.1, Number(qualityInput.value) || 0.6));
+      const intervalMs = Math.round(1000 / fps);
+
+      timer = setInterval(async () => {
+        if (!preview.videoWidth || !ws || ws.readyState !== WebSocket.OPEN) return;
+        const jpegBase64 = await frameToBase64(preview, quality);
+        ws.send(JSON.stringify({
+          type: 'frame',
+          jpeg_base64: jpegBase64,
+          enable_ocr: !!ocrInput.checked,
+        }));
+      }, intervalMs);
+
+      startBtn.disabled = true;
+      stopBtn.disabled = false;
+      sendTextBtn.disabled = false;
+      micBtn.disabled = false;
+      setupMic();
+      sendUserText('what do you see right now?');
+    }
+
+    function stop() {
+      if (timer) clearInterval(timer);
+      timer = null;
+      if (recognition && listening) {
+        listening = false;
+        recognition.stop();
+      }
+      if (ws) ws.close();
+      ws = null;
+      if (stream) {
+        stream.getTracks().forEach(t => t.stop());
+      }
+      stream = null;
+      startBtn.disabled = false;
+      stopBtn.disabled = true;
+      sendTextBtn.disabled = true;
+      micBtn.disabled = true;
+      micBtn.textContent = 'Start mic';
+    }
+
+    startBtn.addEventListener('click', () => start().catch(err => setOutput(String(err))));
+    stopBtn.addEventListener('click', stop);
+
+    sendTextBtn.addEventListener('click', () => sendUserText(userTextInput.value));
+    userTextInput.addEventListener('keydown', (evt) => {
+      if (evt.key === 'Enter') {
+        evt.preventDefault();
+        sendUserText(userTextInput.value);
+      }
+    });
+
+    micBtn.addEventListener('click', () => {
+      if (!recognition) return;
+      listening = !listening;
+      if (listening) {
+        recognition.start();
+        micBtn.textContent = 'Stop mic';
+      } else {
+        recognition.stop();
+        micBtn.textContent = 'Start mic';
+      }
+    });
+  </script>
+</body>
+</html>
