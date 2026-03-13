@@ -8,6 +8,9 @@ Instead of desktop capture libraries, it uses the browser's native `getDisplayMe
 2. You choose exactly which screen/window/tab to share.
 3. The page streams frames to a Python backend.
 4. The backend analyzes each frame and can respond in text that the browser can speak aloud.
+4. The backend runs AI-style analysis on each frame.
+
+This works well in Codespaces because the browser is already your UI surface.
 
 ## Why this avoids `mss`
 
@@ -49,6 +52,8 @@ Open forwarded port `8000` in your browser and click **Start sharing**.
 - Server responds with JSON containing:
   - frame analysis payload
   - `assistant_text` response suitable for TTS playback
+  - `control`: start/stop and settings updates
+- Server responds with JSON containing analysis for each frame.
 
 ## Notes for Codespaces
 
@@ -61,3 +66,4 @@ Open forwarded port `8000` in your browser and click **Start sharing**.
 
 You can route sampled frames to a multimodal model for higher-level reasoning.
 A helper stub is included in `vision_llm.py` for sending a frame to an OpenAI-compatible endpoint.
+
